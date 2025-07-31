@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WinGo Color Predictor</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0a0f23;
+      color: #eee;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .card {
+      background: #1a1a1a;
+      padding: 40px;
+      border-radius: 20px;
+      box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+      text-align: center;
+      width: 220px;
+    }
+    .title {
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+    .circle {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      margin: 0 auto 20px;
+    }
+    .entry-btn {
+      padding: 12px 25px;
+      font-size: 18px;
+      background: #333;
+      color: white;
+      border: 2px solid #555;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">Next bet:</div>
+    <div id="colorDot" class="circle" style="background: #555;"></div>
+    <button class="entry-btn" onclick="predict()">Entry</button>
+  </div>
+
+  <script>
+    const API_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json";
+    const PATTERN_URL = "https://raw.githubusercontent.com/Gahjg/terandslist7.txt/refs/heads/main/terandslist7.txt";
+    const TARGET_DATA_COUNT = 10;
+    const MAX_FAILS = 1;
+
+    let trendHistory = {};
+
+    function determineSize(number) {
+      return parseInt(number) >= 5 ? "Big" : "Small";
+    }
+
+    function determineColor(number) {
+      return parseInt(number) % 2 === 0 ? "Red" : "Green";
+    }
+
+    async function fetchLatestResults(count = 100) {
+      try {
+        const res = await fetch(API_URL);
+        const data = await res.json();
+        return data.data.list.slice(0, count).reverse().map(entry => ({
+          issue: entry.issueNumber.toString(),
+          number: entry.number.toString(),
+          color: entry.color.toString()
+        }));
+      } catch {
+        return [];
+      }
+    }
+
+    async function loadTrendPatterns(url) {
+      const res = await fetch(url);
+      const text = await res.text();
+      const lines = text.split("\n");
+
+      const trends = {};
+      let currentTrend = null;
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        if (line.includes("Trend")) {
+          currentTrend = line.replace("Trend", "").trim();
+          trends[currentTrend] = [];
+        } else if (line.includes("->")) {
+          try {
+            const left = line.split("->")[0].trim();
+            const seq = left.split(".")[1].trim();
+            trends[currentTrend].push(seq);
+          } catch { continue; }
+        }
+      }
+      return trends;
+    }
+
+    function fuzzyMatchSegment(recent, patterns, len) {
+      let best = null, maxScore = -1;
+
+      for (const str of patterns) {
+        for (let i = 0; i < str.length - len; i++) {
+          const seg = str.slice(i, i + len);
+          let score = 0;
+
+          for (let j = 0; j < len; j++) {
+            const a = recent[j], b = seg[j];
+            if (a === b) {
+              score += 2;
+            } else if (determineColor(a) === determineColor(b) && determineSize(a) === determineSize(b)) {
+              score += 1;
+            }
+          }
+
+          const next = str[i + len];
+          if (next && score > maxScore) {
+            maxScore = score;
+            best = { segment: seg, score, next_digit: next };
+          }
+        }
+      }
+      return best;
+    }
+
+    function getBestColorMatch(recentNums, trends) {
+      const matches = [];
+
+      for (const [trendName, patterns] of Object.entries(trends)) {
+        if ((trendHistory[trendName]?.fail || 0) >= MAX_FAILS) continue;
+
+        for (const len of [8, 7, 6, 5]) {
+          if (recentNums.length < len) continue;
+          const match = fuzzyMatchSegment(recentNums.slice(-len), patterns, len);
+          if (match) {
+            const color = determineColor(match.next_digit);
+            if (["Red", "Green"].includes(color)) {
+              match.trend_name = trendName;
+              match.match_length = len;
+              match.dominant_color = color;
+              matches.push(match);
+            }
+          }
+        }
+      }
+
+      return matches.sort((a, b) => b.score - a.score)[0] || null;
+    }
+
+    async function predict() {
+      const trends = await loadTrendPatterns(PATTERN_URL);
+      const data = await fetchLatestResults(TARGET_DATA_COUNT);
+
+      if (data.length < TARGET_DATA_COUNT) return;
+
+      const recentNumbers = data.map(d => d.number).join("");
+      const result = getBestColorMatch(recentNumbers, trends);
+
+      const colorDot = document.getElementById("colorDot");
+      if (result) {
+        if (result.dominant_color === "Red") {
+          colorDot.style.background = "#d32f2f";
+        } else if (result.dominant_color === "Green") {
+          colorDot.style.background = "#43a047";
+        } else {
+          colorDot.style.background = "#555";
+        }
+      } else {
+        colorDot.style.background = "#555";
+      }
+    }
+  </script>
+</body>
+</html>
